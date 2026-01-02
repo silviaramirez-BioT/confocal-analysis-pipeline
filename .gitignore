@@ -1,0 +1,16 @@
+# Archivos de Python
+__pycache__/
+*.py[cod]
+venv/
+
+# Archivos de Datos (Importante: NO subir datos confidenciales)
+*.csv
+*.xlsx
+*.lif
+*.tif
+*.png
+*.jpg
+
+# Archivos de sistema
+.DS_Store
+Thumbs.db
