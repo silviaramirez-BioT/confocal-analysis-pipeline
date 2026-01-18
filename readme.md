@@ -94,4 +94,4 @@ Este flujo de trabajo sigue protocolos validados para cuantificación biológica
 
 ### 📝 Créditos
 Desarrollado para el análisis de biomoléculas en biotecnología.
-**Autor:** [Tu Nombre/Usuario]
+**Autor:** M.Sc. Silvia Ramirez
