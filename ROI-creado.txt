@@ -1,0 +1,202 @@
+run("Close All");
+print("\\Clear");
+
+run("Set Measurements...", "area mean standard min integrated area_fraction display redirect=None decimal=3");
+run("Options...", "iterations=1 count=1 black");
+setForegroundColor(255, 255, 255);
+setBackgroundColor(0, 0, 0);
+
+Dialog.create("Configuración");
+Dialog.addChoice("Modo:", newArray("Procesar Carpeta", "Un solo archivo (.lif)"));
+Dialog.show();
+modo = Dialog.getChoice();
+
+if (modo == "Procesar Carpeta") {
+    dirInput = getDirectory("Selecciona CARPETA entrada");
+} else {
+    path = File.openDialog("Selecciona ARCHIVO .lif");
+    dirInput = File.getParent(path) + File.separator;
+    archivoUnico = File.getName(path);
+}
+
+dirSalida = getDirectory("Selecciona carpeta SALIDA vacía");
+
+dirCanales = dirSalida + "01_Canales_Separados" + File.separator; File.makeDirectory(dirCanales);
+dirMerged = dirSalida + "02_Merged_RGB" + File.separator; File.makeDirectory(dirMerged);
+dirMascaras = dirSalida + "03_Mascaras_Binarias" + File.separator; File.makeDirectory(dirMascaras);
+dirOutlines = dirSalida + "04_Control_Outlines" + File.separator; File.makeDirectory(dirOutlines);
+
+f = File.open(dirSalida + "Resultados_Finales.csv");
+print(f, "Image_Name,Cell_ID,Area_Celular,Mean_Blue,Mean_Green,Mean_Red,IntDen_Green,IntDen_Red,Perc_Area_Green,Perc_Area_Red");
+
+run("Bio-Formats Macro Extensions");
+setBatchMode(false); 
+
+if (modo == "Un solo archivo (.lif)") {
+    processLIF(dirInput, archivoUnico);
+} else {
+    processFolder(dirInput);
+}
+
+File.close(f);
+showMessage("¡Terminado!", "Proceso completado correctamente.\nYa no debería salir el error de ventanas.");
+
+function processFolder(dir) {
+    list = getFileList(dir);
+    for (k = 0; k < list.length; k++) {
+        fName = list[k];
+        if (File.isDirectory(dir + fName)) {
+            processFolder(dir + fName);
+        } else if (endsWith(toLowerCase(fName), ".lif") || endsWith(toLowerCase(fName), ".czi")) {
+            processLIF(dir, fName);
+        } else if (endsWith(toLowerCase(fName), "azul.tif") || endsWith(toLowerCase(fName), "blue.tif")) {
+            processTIF(dir, fName);
+        }
+    }
+}
+
+function processLIF(dir, filename) {
+    path = dir + filename;
+    Ext.setId(path);
+    Ext.getSeriesCount(numSeries);
+    for (i = 0; i < numSeries; i++) {
+        run("Bio-Formats Importer", "open=[" + path + "] autoscale color_mode=Composite view=Hyperstack stack_order=XYCZT series_" + (i+1));
+        analyzeSafe(getTitle());
+    }
+}
+
+function processTIF(dir, blueFile) {
+    open(dir + blueFile); rename("C1");
+    greenFile = replace(blueFile, "azul", "verde"); greenFile = replace(greenFile, "blue", "green");
+    redFile = replace(blueFile, "azul", "rojo");    redFile = replace(redFile, "blue", "red");
+    
+    if (!File.exists(dir+greenFile)) greenFile=replace(greenFile, ".tif", ".TIF");
+    
+    if (File.exists(dir + greenFile)) { open(dir + greenFile); rename("C2"); }
+    if (File.exists(dir + redFile))   { open(dir + redFile);   rename("C3"); }
+    
+    strMerge = "c3=C1 ";
+    if (isOpen("C2")) strMerge = strMerge + "c2=C2 ";
+    if (isOpen("C3")) strMerge = strMerge + "c1=C3 ";
+    
+    run("Merge Channels...", strMerge + "create keep");
+    titulo = replace(blueFile, " - azul.tif", "");
+    rename(titulo);
+    analyzeSafe(titulo);
+    run("Close All");
+}
+
+function analyzeSafe(titulo) {
+    safeTitle = replace(titulo, ".lif", "");
+    safeTitle = replace(safeTitle, " - ", "_");
+    safeTitle = replace(safeTitle, " ", "_");
+    
+    getDimensions(width, height, channels, slices, frames);
+    
+    if (channels > 1) {
+        run("Split Channels");
+    } else {
+        rename("C1-Temp");
+    }
+    
+    titulosAbiertos = getList("image.titles");
+    for (j=0; j<titulosAbiertos.length; j++) {
+        t = titulosAbiertos[j];
+        selectWindow(t);
+        if (indexOf(t, "C1") >= 0) rename("CANAL_1");
+        else if (indexOf(t, "C2") >= 0) rename("CANAL_2");
+        else if (indexOf(t, "C3") >= 0) rename("CANAL_3");
+    }
+    
+    winBlue = "CANAL_1"; 
+    winGreen = "CANAL_2"; 
+    winRed = "CANAL_3";
+    
+    hasBlue = isOpen(winBlue);
+    hasGreen = isOpen(winGreen);
+    hasRed = isOpen(winRed);
+    
+    if (!hasBlue && hasRed && !hasGreen) {
+        selectWindow(winRed); rename("CANAL_1");
+        winBlue = "CANAL_1"; hasBlue = true; hasRed = false;
+    }
+
+    if (hasBlue) { selectWindow(winBlue); saveAs("Tiff", dirCanales + "Azul_" + safeTitle); rename(winBlue); }
+    if (hasGreen) { selectWindow(winGreen); saveAs("Tiff", dirCanales + "Verde_" + safeTitle); rename(winGreen); }
+    if (hasRed) { selectWindow(winRed); saveAs("Tiff", dirCanales + "Rojo_" + safeTitle); rename(winRed); }
+
+    // --- CAMBIO: Se eliminó el bloque de detección automática ---
+    // Simplemente pasamos directo a mostrarte la imagen para que tú dibujes.
+
+    strMerge = "";
+    if (hasRed) strMerge = strMerge + "c1=["+winRed+"] ";
+    if (hasGreen) strMerge = strMerge + "c2=["+winGreen+"] ";
+    if (hasBlue) strMerge = strMerge + "c3=["+winBlue+"] ";
+    
+    if (strMerge != "") { 
+        run("Merge Channels...", strMerge + "create keep"); 
+        rename("REF_VISUAL"); 
+    } else if (hasBlue) { 
+        selectWindow(winBlue); 
+    }
+    
+    setTool("freehand");
+    roiManager("Reset"); // <--- IMPORTANTE: Asegura que la lista esté vacía al empezar
+    roiManager("Show All");
+    
+    // El mensaje ahora indica que debes dibujar tú
+    waitForUser("SELECCIÓN MANUAL", "1. Dibuja tus células (Freehand).\n2. Pulsa 't' para agregar cada una.\n3. Pulsa OK cuando termines.");
+    
+    if (isOpen("REF_VISUAL")) close("REF_VISUAL");
+
+    newImage("Mascara_Final", "8-bit black", width, height, 1);
+    if (roiManager("count") > 0) { roiManager("Deselect"); roiManager("Fill"); }
+    saveAs("Tiff", dirMascaras + "Mascara_" + safeTitle);
+    close();
+
+    count = roiManager("count");
+    if (count > 0) {
+        for (r = 0; r < count; r++) {
+            roiManager("Select", r);
+            
+            meanB=0; area=0;
+            if (hasBlue) {
+                selectWindow(winBlue); resetThreshold(); 
+                run("Measure");
+                area=getResult("Area",nResults-1); meanB=getResult("Mean",nResults-1);
+            }
+            
+            meanG=0; intDenG=0; percG=0;
+            if (hasGreen) {
+                selectWindow(winGreen); resetThreshold();
+                run("Measure");
+                meanG=getResult("Mean",nResults-1); intDenG=getResult("IntDen",nResults-1);
+                
+                run("Duplicate...", "title=TG"); setAutoThreshold("Moments dark"); run("Measure"); 
+                percG=getResult("%Area",nResults-1); close("TG");
+            }
+            
+            meanR=0; intDenR=0; percR=0;
+            if (hasRed) {
+                selectWindow(winRed); resetThreshold();
+                run("Measure");
+                meanR=getResult("Mean",nResults-1); intDenR=getResult("IntDen",nResults-1);
+                
+                run("Duplicate...", "title=TR"); setAutoThreshold("Moments dark"); run("Measure"); 
+                percR=getResult("%Area",nResults-1); close("TR");
+            }
+            
+            print(f, titulo + "," + (r+1) + "," + area + "," + meanB + "," + meanG + "," + meanR + "," + intDenG + "," + intDenR + "," + percG + "," + percR);
+        }
+        
+        if (strMerge != "") {
+            run("Merge Channels...", strMerge + "create keep");
+            run("RGB Color");
+            saveAs("Jpeg", dirMerged + "Merged_" + safeTitle + ".jpg");
+            roiManager("Show All without labels"); run("Flatten");
+            saveAs("Jpeg", dirOutlines + "Check_" + safeTitle + ".jpg");
+        }
+    }
+    roiManager("Delete");
+    close("*");
+}

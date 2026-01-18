@@ -1,0 +1,61 @@
+APPENDIX A. Computational Image Analysis Protocol
+
+A.1. Algorithm Description (Fiji/ImageJ)
+To ensure reproducibility and minimize manual selection bias, a semi-automated 
+segmentation routine was developed. The workflow operates on the following logic:
+
+1. Detection Strategy ("Merge Mask"): 
+   Unlike traditional nuclear segmentation, this algorithm generates an additive 
+   mask by summing intensities from all channels (Sum = Blue + Green + Red). 
+   This ensures the detection of cells with weak nuclear staining but high 
+   parietal marker expression.
+
+2. Pre-processing:
+   - Background Subtraction: Rolling Ball algorithm (radius=50 px) to remove 
+     diffuse noise.
+   - Smoothing: Gaussian Blur filter (sigma=2) to homogenize boundaries.
+
+3. Segmentation: 
+   The "Triangle" thresholding algorithm is applied, optimized to maximize the 
+   detection of weak signals in histograms with long tails. Subsequently, a 
+   Watershed algorithm separates adjacent cells.
+
+4. Execution Modes:
+   - Automatic: High-speed batch processing.
+   - Curated (Editable): Includes programmed pauses for human validation 
+     (artifact removal or manual ROI addition).
+
+A.2. Data Dictionary and Biological Interpretation
+The post-processing software (Python) generates the following metrics for 
+each individual ROI:
+
+a) Signal/Nucleus Ratio (Variable: Ratio_Green_Blue)
+   - Technical Definition: Mean Marker Intensity / Mean Nucleus Intensity.
+   - Biological Interpretation: Relative Abundance. It normalizes the signal 
+     against DNA content, correcting for technical variations (focus, laser 
+     power). This is the primary comparative metric.
+
+b) Physical Coverage (Variable: Perc_Area %)
+   - Technical Definition: Percentage of total cell area exceeding the 
+     fluorescence threshold.
+   - Biological Interpretation: Spatial Distribution. 
+     (Low % = Punctate/vesicular signal; High % = Uniform distribution).
+
+c) Integrated Density (Variable: IntDen)
+   - Technical Definition: Mean Intensity x Total Cell Area.
+   - Biological Interpretation: Total Load. Represents the absolute amount 
+     of accumulated substance. Useful when cell size varies significantly 
+     between groups.
+
+d) Absolute Intensity %
+   - Technical Definition: Intensity scaled (0-100%) according to bit-depth 
+     (8/12/16-bit).
+   - Biological Interpretation: Sensor saturation indicator. Useful for 
+     acquisition quality control.
+
+A.3. Statistical Treatment
+Due to the heterogeneous nature of biological samples (e.g., focal vesicle 
+accumulation), fluorescence data do not follow a normal distribution 
+(Shapiro-Wilk test, p < 0.05). Therefore, this study reports the Median 
+and Interquartile Range (IQR) as robust measures of central tendency and 
+dispersion, neutralizing bias from outliers.

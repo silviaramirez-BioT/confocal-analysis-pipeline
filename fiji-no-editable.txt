@@ -1,0 +1,201 @@
+run("Close All");
+print("\\Clear");
+
+run("Set Measurements...", "area mean standard min integrated area_fraction display redirect=None decimal=3");
+
+Dialog.create("Configuración de Entrada");
+Dialog.addMessage("¿Qué deseas procesar?");
+Dialog.addChoice("Modo:", newArray("Procesar Carpeta Completa", "Seleccionar un solo archivo (.lif)"));
+Dialog.show();
+modo = Dialog.getChoice();
+
+dirInput = "";
+archivoUnico = "";
+
+if (modo == "Procesar Carpeta Completa") {
+    dirInput = getDirectory("Selecciona la CARPETA con imágenes");
+} else {
+    path = File.openDialog("Selecciona el ARCHIVO (.lif)");
+    dirInput = File.getParent(path) + File.separator;
+    archivoUnico = File.getName(path);
+}
+
+dirSalida = getDirectory("Selecciona carpeta VACÍA para resultados");
+
+dirCanales = dirSalida + "01_Canales_Separados" + File.separator; File.makeDirectory(dirCanales);
+dirMerged = dirSalida + "02_Merged_RGB" + File.separator; File.makeDirectory(dirMerged);
+dirMascaras = dirSalida + "03_Mascaras_Binarias" + File.separator; File.makeDirectory(dirMascaras);
+dirOutlines = dirSalida + "04_Control_Outlines" + File.separator; File.makeDirectory(dirOutlines);
+
+f = File.open(dirSalida + "Resultados_MascaraMerge.csv");
+print(f, "Image_Name,Cell_ID,Area_Celular,Mean_Blue,Mean_Green,Mean_Red,IntDen_Green,IntDen_Red,Perc_Area_Green,Perc_Area_Red");
+
+run("Bio-Formats Macro Extensions");
+setBatchMode(true); 
+
+if (modo == "Seleccionar un solo archivo (.lif)") {
+    print("Procesando archivo único: " + archivoUnico);
+    processLIF(dirInput, archivoUnico);
+} else {
+    print("Procesando carpeta completa...");
+    processFolder(dirInput);
+}
+
+File.close(f);
+showMessage("¡Listo!", "Análisis completado en modo automático.\nRevisa la carpeta de resultados.");
+
+function processFolder(dir) {
+    list = getFileList(dir);
+    for (k = 0; k < list.length; k++) {
+        filename = list[k];
+        if (File.isDirectory(dir + filename)) {
+            processFolder(dir + filename);
+        } else if (endsWith(filename, ".lif")) {
+            processLIF(dir, filename);
+        } else if (endsWith(toLowerCase(filename), "azul.tif")) {
+            processTIF(dir, filename);
+        }
+    }
+}
+
+function processLIF(dir, filename) {
+    path = dir + filename;
+    Ext.setId(path);
+    Ext.getSeriesCount(numSeries);
+    for (i = 0; i < numSeries; i++) {
+        run("Bio-Formats Importer", "open=[" + path + "] autoscale color_mode=Composite view=Hyperstack stack_order=XYCZT series_" + (i+1));
+        analyzeMergeMask(getTitle());
+    }
+}
+
+function processTIF(dir, blueFile) {
+    open(dir + blueFile); rename("C1");
+    greenFile = replace(blueFile, "azul", "verde");
+    redFile = replace(blueFile, "azul", "rojo");
+    
+    if (File.exists(dir + greenFile)) { open(dir + greenFile); rename("C2"); }
+    if (File.exists(dir + redFile))   { open(dir + redFile);   rename("C3"); }
+    
+    strMerge = "c3=C1 ";
+    if (isOpen("C2")) strMerge = strMerge + "c2=C2 ";
+    if (isOpen("C3")) strMerge = strMerge + "c1=C3 ";
+    
+    run("Merge Channels...", strMerge + "create keep");
+    titulo = replace(blueFile, " - azul.tif", "");
+    rename(titulo);
+    
+    analyzeMergeMask(titulo);
+    run("Close All"); 
+}
+
+function analyzeMergeMask(titulo) {
+    safeTitle = replace(titulo, ".lif", "");
+    safeTitle = replace(safeTitle, ".tif", "");
+    safeTitle = replace(safeTitle, " - ", "_");
+    
+    run("Split Channels");
+    
+    cBlue = "C3-" + titulo;
+    cGreen = "C2-" + titulo;
+    cRed = "C1-" + titulo;
+    if (!isOpen(cBlue)) cBlue = "C1-" + titulo; 
+
+    if (isOpen(cBlue)) { selectWindow(cBlue); saveAs("Tiff", dirCanales + "Azul_" + safeTitle); rename(cBlue); }
+    if (isOpen(cGreen)) { selectWindow(cGreen); saveAs("Tiff", dirCanales + "Verde_" + safeTitle); rename(cGreen); }
+    if (isOpen(cRed)) { selectWindow(cRed); saveAs("Tiff", dirCanales + "Rojo_" + safeTitle); rename(cRed); }
+
+    if (isOpen(cGreen) && isOpen(cBlue)) {
+        imageCalculator("Add create", cBlue, cGreen);
+        rename("Suma_Temp");
+    } else {
+        selectWindow(cBlue);
+        run("Duplicate...", "title=Suma_Temp");
+    }
+    
+    if (isOpen(cRed)) {
+        imageCalculator("Add create", "Suma_Temp", cRed);
+        rename("Suma_Total");
+        close("Suma_Temp"); 
+    } else {
+        selectWindow("Suma_Temp");
+        rename("Suma_Total");
+    }
+    
+    selectWindow("Suma_Total");
+    run("Subtract Background...", "rolling=50");
+    run("Gaussian Blur...", "sigma=2");
+    setAutoThreshold("Triangle dark"); 
+    run("Convert to Mask");
+    run("Fill Holes"); 
+    run("Watershed");  
+    
+    saveAs("Tiff", dirMascaras + "Mascara_" + safeTitle);
+    rename("Mask");
+    
+    run("Analyze Particles...", "size=0-Infinity exclude add");
+    close("Suma_Total"); 
+    
+    numROIs = roiManager("count");
+    
+    if (numROIs > 0) {
+        for (r = 0; r < numROIs; r++) {
+            roiManager("Select", r);
+            
+            meanB = 0; area = 0;
+            if (isOpen(cBlue)) {
+                selectWindow(cBlue); resetThreshold();
+                run("Measure");
+                area = getResult("Area", nResults-1);
+                meanB = getResult("Mean", nResults-1);
+            }
+            
+            meanG=0; intDenG=0; percG=0;
+            if (isOpen(cGreen)) {
+                selectWindow(cGreen); resetThreshold();
+                run("Measure");
+                meanG = getResult("Mean", nResults-1);
+                intDenG = getResult("IntDen", nResults-1);
+                
+                run("Duplicate...", "title=TempG");
+                setAutoThreshold("Moments dark");
+                run("Measure");
+                percG = getResult("%Area", nResults-1);
+                close("TempG");
+            }
+            
+            meanR=0; intDenR=0; percR=0;
+            if (isOpen(cRed)) {
+                selectWindow(cRed); resetThreshold();
+                run("Measure");
+                meanR = getResult("Mean", nResults-1);
+                intDenR = getResult("IntDen", nResults-1);
+                
+                run("Duplicate...", "title=TempR");
+                setAutoThreshold("Moments dark");
+                run("Measure");
+                percR = getResult("%Area", nResults-1);
+                close("TempR");
+            }
+            
+            print(f, titulo + "," + (r+1) + "," + area + "," + meanB + "," + meanG + "," + meanR + "," + intDenG + "," + intDenR + "," + percG + "," + percR);
+        }
+        
+        strMerge = "";
+        if (isOpen(cRed)) strMerge = strMerge + "c1=["+cRed+"] ";
+        if (isOpen(cGreen)) strMerge = strMerge + "c2=["+cGreen+"] ";
+        if (isOpen(cBlue)) strMerge = strMerge + "c3=["+cBlue+"] ";
+        
+        if (strMerge != "") {
+            run("Merge Channels...", strMerge + "create");
+            run("RGB Color");
+            saveAs("Jpeg", dirMerged + "Merged_" + safeTitle + ".jpg");
+            
+            roiManager("Show All without labels");
+            run("Flatten"); 
+            saveAs("Jpeg", dirOutlines + "Check_" + safeTitle + ".jpg");
+        }
+    }
+    
+    roiManager("Delete");
+    close("*");
+}
